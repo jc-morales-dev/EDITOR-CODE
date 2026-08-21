@@ -12,7 +12,7 @@
     "electron-start": "wait-on tcp:5173 && cross-env ELECTRON_START_URL=http://localhost:5173 electron .",
     "build": "tsc && vite build",
     "electron-pack": "npm run build && electron-builder",
-    "lint": "eslint src vite.config.ts vitest.config.ts",
+    "lint": "eslint src electron vite.config.ts vitest.config.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.node.json --noEmit",
     "test": "vitest run",
     "test:watch": "vitest"

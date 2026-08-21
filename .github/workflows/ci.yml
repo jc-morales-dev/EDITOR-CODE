@@ -4,8 +4,12 @@ on:
   push:
     branches: ['main']
   pull_request:
+  workflow_dispatch:
 
 jobs:
+  # Todo lo que no necesita compilar node-pty, que exige toolchain de C++ y
+  # alarga el arranque. Con --ignore-scripts basta para lint, tipos, tests y
+  # el bundle web, que es lo que se rompe a diario.
   quality:
     runs-on: ubuntu-latest
 
@@ -30,3 +34,54 @@ jobs:
 
       - name: Test
         run: npm run test
+
+      # Faltaba: la CI validaba tipos pero nunca comprobaba que el bundle
+      # llegara a construirse, así que un fallo de build solo aparecía al
+      # empaquetar a mano.
+      - name: Build
+        run: npm run build
+
+      - name: Comprobar que el bundle existe
+        run: test -f dist/index.html
+
+  # El empaquetado sí necesita las dependencias nativas compiladas. Va aparte
+  # porque es lento y depende del sistema operativo; se ejecuta a mano o al
+  # publicar, no en cada commit.
+  package:
+    if: github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/v')
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      # node-pty se compila desde fuente: sin esto el install falla en limpio.
+      - name: Setup Python (node-gyp)
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies (con scripts nativos)
+        run: npm ci
+
+      - name: Empaquetar sin publicar
+        run: npx electron-builder --dir
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Subir el resultado
+        uses: actions/upload-artifact@v4
+        with:
+          name: zenith-ide-${{ matrix.os }}
+          path: dist-electron/
+          retention-days: 7
