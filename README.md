@@ -5,7 +5,11 @@
 
 > A Cyberpunk-themed Integrated Development Environment powered by AI.
 
-Zenith IDE is a modern code editor built with **Electron** and **React**, designed to boost productivity through deep AI integration (Gemini). It's not just a chat wrapper; the agent has control over the file system, a real terminal, and "self-healing" capabilities.
+Zenith IDE is an **Electron + React desktop prototype**: a code editor with deep AI integration (Gemini). It's not just a chat wrapper; the agent has control over the file system, a real terminal, and "self-healing" capabilities.
+
+It runs locally as a desktop application — there is no hosted web demo. To try
+it, clone the repository and follow [Installation & usage](#-installation--usage);
+the screenshot below is from a local run.
 
 ![Zenith IDE](./assets/zenith-screenshot.png)
 
@@ -100,7 +104,9 @@ be reviewed before execution.
 
 ## 🧪 Quality
 
-- GitHub Actions CI for `lint`, `typecheck`, and `test`
+- GitHub Actions CI for `lint`, `typecheck`, `test`, and `build`, plus a check
+  that the web bundle is actually emitted. Electron packaging runs in a separate
+  job (manual dispatch or a `v*` tag) because it compiles `node-pty` from source.
 - Public changelog in [CHANGELOG.md](CHANGELOG.md)
 - Smoke tests for the store and the AI service bridge
 - No prebuilt installer is currently attached to the public release; use
