@@ -1,4 +1,5 @@
 import path from 'path';
+import fs from 'fs';
 
 /**
  * Confinamiento de rutas para los handlers de ficheros.
@@ -56,6 +57,130 @@ export function resolveInsideRoot(root, ...segments) {
 }
 
 /**
+ * Resuelve una ruta que ya existe y compara sus rutas físicas. Esto impide
+ * que un symlink/junction ubicado dentro del proyecto redirija la operación a
+ * otro lugar del disco.
+ */
+export function resolveExistingInsideRoot(root, ...segments) {
+  if (!root) {
+    throw new Error('No hay proyecto abierto: abre una carpeta antes de operar con ficheros.');
+  }
+
+  const rootReal = fs.realpathSync(root);
+  const candidate = resolveInsideRoot(root, ...segments);
+  const candidateReal = fs.realpathSync(candidate);
+
+  if (!isInsideRoot(rootReal, candidateReal)) {
+    throw new Error(`Ruta fuera del proyecto: ${path.join(...segments)}`);
+  }
+
+  return candidateReal;
+}
+
+function assertNoLinksBelowRoot(root, candidate) {
+  const rootAbs = normalize(root);
+  const candidateAbs = normalize(candidate);
+  const relative = path.relative(rootAbs, candidateAbs);
+  if (relative === '') return;
+
+  let current = rootAbs;
+  for (const segment of relative.split(path.sep)) {
+    current = path.join(current, segment);
+    try {
+      if (fs.lstatSync(current).isSymbolicLink()) {
+        throw new Error(`No se permiten enlaces simbólicos en operaciones de escritura: ${current}`);
+      }
+    } catch (error) {
+      if (error?.code === 'ENOENT') return;
+      throw error;
+    }
+  }
+}
+
+/**
+ * Valida físicamente una ruta existente para escritura/borrado, rechaza
+ * enlaces bajo la raíz y conserva la entrada lexical solicitada. Conservarla
+ * evita que rename/rm actúen accidentalmente sobre el destino de un enlace.
+ */
+export function resolveMutableExistingInsideRoot(root, ...segments) {
+  const candidate = resolveInsideRoot(root, ...segments);
+  resolveExistingInsideRoot(root, ...segments);
+  assertNoLinksBelowRoot(root, candidate);
+  return candidate;
+}
+
+/**
+ * Resuelve un destino nuevo dentro de un directorio físico ya validado. Si el
+ * destino existe, también valida su ruta real para no seguir enlaces externos.
+ */
+export function resolveNewInsideRoot(root, basePath, name) {
+  if (!root) {
+    throw new Error('No hay proyecto abierto: abre una carpeta antes de operar con ficheros.');
+  }
+  const rootReal = fs.realpathSync(root);
+  const basePathSafe = resolveMutableExistingInsideRoot(root, basePath);
+  const baseReal = fs.realpathSync(basePathSafe);
+
+  if (!fs.statSync(baseReal).isDirectory()) {
+    throw new Error('La ruta base no es una carpeta.');
+  }
+
+  const candidate = path.resolve(basePathSafe, name);
+  if (!isInsideRoot(root, candidate)) {
+    throw new Error(`Ruta fuera del proyecto: ${name}`);
+  }
+
+  let candidateStat = null;
+  try {
+    candidateStat = fs.lstatSync(candidate);
+  } catch (error) {
+    if (error?.code !== 'ENOENT') throw error;
+  }
+
+  if (candidateStat?.isSymbolicLink()) {
+    throw new Error(`No se permiten enlaces simbólicos en operaciones de escritura: ${candidate}`);
+  }
+
+  assertNoLinksBelowRoot(root, candidate);
+
+  if (candidateStat) {
+    const candidateReal = fs.realpathSync(candidate);
+    if (!isInsideRoot(rootReal, candidateReal)) {
+      throw new Error(`Ruta fuera del proyecto: ${name}`);
+    }
+    return candidate;
+  }
+
+  return candidate;
+}
+
+/**
+ * Convierte rutas recibidas por los handlers Git en pathspecs relativos y
+ * confinados. El separador `--` debe añadirse al invocar Git para evitar que
+ * un nombre de fichero pueda interpretarse como opción.
+ */
+export function normalizeGitPathspecs(projectPath, files) {
+  if (!Array.isArray(files) || files.length === 0) {
+    throw new Error('Se requiere al menos una ruta de fichero.');
+  }
+
+  return files.map((file) => {
+    if (typeof file !== 'string' || file.trim() === '' || file.includes('\0')) {
+      throw new Error('Ruta Git no válida.');
+    }
+
+    const absolute = resolveInsideRoot(projectPath, file);
+    if (fs.existsSync(absolute)) {
+      // Valida el destino físico, pero conserva el pathspec original para Git.
+      resolveExistingInsideRoot(projectPath, file);
+    }
+    const relative = path.relative(projectPath, absolute);
+    if (relative === '') return '.';
+    return `:(literal)${relative.split(path.sep).join('/')}`;
+  });
+}
+
+/**
  * Nombres de fichero que nunca deben aceptarse desde el renderer, ni siquiera
  * antes de resolver: separadores de ruta, referencias relativas y vacíos.
  */
@@ -66,4 +191,28 @@ export function isSafeFileName(name) {
   if (trimmed.includes('/') || trimmed.includes('\\')) return false;
   if (trimmed.includes('\0')) return false;
   return true;
+}
+
+/**
+ * Valida el directorio inicial de la terminal contra la raíz elegida por el
+ * usuario. `realpathSync` evita que un junction o symlink interno apunte fuera.
+ * Esto protege el arranque; la shell sigue siendo una terminal real y no un
+ * sandbox del sistema operativo.
+ */
+export function resolveTerminalCwd(root, requestedCwd = root) {
+  if (!root) {
+    throw new Error('No hay proyecto abierto: abre una carpeta antes de iniciar la terminal.');
+  }
+
+  const rootReal = fs.realpathSync(root);
+  const requestedReal = resolveExistingInsideRoot(root, requestedCwd || root);
+
+  if (!fs.statSync(requestedReal).isDirectory()) {
+    throw new Error('El directorio solicitado para la terminal no es una carpeta.');
+  }
+  if (!isInsideRoot(rootReal, requestedReal)) {
+    throw new Error('Ruta fuera del proyecto: directorio de terminal no permitido.');
+  }
+
+  return requestedReal;
 }

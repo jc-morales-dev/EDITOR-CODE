@@ -55,7 +55,7 @@ Zenith IDE is meant as a local tool for exploring AI-assisted development workfl
 
 2. **Install dependencies**
    ```bash
-   npm install
+   npm ci
    ```
 
 3. **Configure environment variables**
@@ -87,6 +87,8 @@ Zenith IDE is meant as a local tool for exploring AI-assisted development workfl
 - GitHub Actions CI for `lint`, `typecheck`, and `test`
 - Public changelog in [CHANGELOG.md](CHANGELOG.md)
 - Smoke tests for the store and the AI service bridge
+- No prebuilt installer is currently attached to the public release; use
+  `npm run electron-pack` to create a local package.
 
 ### Quality scripts
 
@@ -94,6 +96,7 @@ Zenith IDE is meant as a local tool for exploring AI-assisted development workfl
 npm run lint
 npm run typecheck
 npm run test
+npm run build
 ```
 
 ## 🎯 Basic usage

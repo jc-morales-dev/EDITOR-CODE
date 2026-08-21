@@ -1,11 +1,19 @@
 import path from 'path';
 import fs from 'fs';
-import { fileURLToPath } from 'url';
+import { fileURLToPath, pathToFileURL } from 'url';
 import { GoogleGenerativeAI } from '@google/generative-ai';
 import dotenv from 'dotenv';
 import chokidar from 'chokidar';
 import { createRequire } from 'module';
-import { resolveInsideRoot, isSafeFileName } from './pathGuard.js';
+import {
+  isSafeFileName,
+  normalizeGitPathspecs,
+  resolveExistingInsideRoot,
+  resolveMutableExistingInsideRoot,
+  resolveNewInsideRoot,
+  resolveTerminalCwd,
+} from './pathGuard.js';
+import { isAllowedNavigation } from './navigationGuard.js';
 
 // CommonJS modules (electron, node-pty, simple-git)
 const require = createRequire(import.meta.url);
@@ -26,6 +34,14 @@ let terminalProcess = null; // Variable para el proceso de terminal
 // nativo, y todas las operaciones de fichero se confinan dentro (pathGuard.js).
 // Sin carpeta abierta no se toca el disco.
 let projectRoot = null;
+
+function resolveRequestedProjectPath(requestedPath) {
+  const safeProject = resolveExistingInsideRoot(projectRoot, requestedPath || projectRoot);
+  if (!fs.statSync(safeProject).isDirectory()) {
+    throw new Error('La ruta del proyecto no es una carpeta.');
+  }
+  return safeProject;
+}
 
 // RUTA DE SETTINGS (lazy loading porque app.getPath no está disponible antes de app.ready)
 let SETTINGS_PATH = null;
@@ -56,10 +72,21 @@ function createWindow() {
     titleBarOverlay: { color: '#000000', symbolColor: '#ffffff', height: 30 },
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
-      nodeIntegration: false, contextIsolation: true,
+      nodeIntegration: false, contextIsolation: true, sandbox: true,
     },
   });
-  const startUrl = process.env.ELECTRON_START_URL || `file://${path.join(__dirname, '../dist/index.html')}`;
+  const startUrl = process.env.ELECTRON_START_URL || pathToFileURL(path.join(__dirname, '../dist/index.html')).href;
+
+  const blockUntrustedNavigation = (event, targetUrl) => {
+    if (!isAllowedNavigation(startUrl, targetUrl)) {
+      event.preventDefault();
+      console.warn(`[navigation] Bloqueada navegación fuera de la aplicación: ${targetUrl}`);
+    }
+  };
+
+  mainWindow.webContents.on('will-navigate', blockUntrustedNavigation);
+  mainWindow.webContents.on('will-redirect', blockUntrustedNavigation);
+  mainWindow.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
   mainWindow.loadURL(startUrl);
 }
 
@@ -149,7 +176,7 @@ async function readDirRecursive(dirPath, currentDepth = 0) {
 
 ipcMain.handle('fs:readFile', async (event, filePath) => {
   try {
-    const safePath = resolveInsideRoot(projectRoot, filePath);
+    const safePath = resolveExistingInsideRoot(projectRoot, filePath);
     return await fs.promises.readFile(safePath, 'utf-8');
   } catch (e) { return ""; }
 });
@@ -174,7 +201,7 @@ ipcMain.handle('fs:readDir', async (event, dirPath) => {
 
   let safeDir;
   try {
-    safeDir = resolveInsideRoot(projectRoot, dirPath);
+    safeDir = resolveExistingInsideRoot(projectRoot, dirPath);
   } catch (e) {
     console.warn(`[fs:readDir] ${e.message}`);
     return [];
@@ -197,8 +224,7 @@ ipcMain.handle('fs:createFile', async (event, { basePath, name, content }) => {
     // El nombre se valida aparte: sin esto, un "name" con ../ escaparía de
     // basePath aunque basePath sí estuviera dentro del proyecto.
     if (!isSafeFileName(name)) throw new Error(`Nombre de fichero no válido: ${name}`);
-    const safeBase = resolveInsideRoot(projectRoot, basePath);
-    const fullPath = resolveInsideRoot(safeBase, name);
+    const fullPath = resolveNewInsideRoot(projectRoot, basePath, name);
     await fs.promises.writeFile(fullPath, content || '', 'utf-8');
     return { success: true, file: { name, path: fullPath, type: 'file', language: getLanguage(name) } };
   } catch (e) {
@@ -209,7 +235,7 @@ ipcMain.handle('fs:createFile', async (event, { basePath, name, content }) => {
 
 ipcMain.handle('fs:saveFile', async (event, { filePath, content }) => {
   try {
-    const safePath = resolveInsideRoot(projectRoot, filePath);
+    const safePath = resolveMutableExistingInsideRoot(projectRoot, filePath);
     await fs.promises.writeFile(safePath, content, 'utf-8');
     return true;
   } catch (e) {
@@ -221,8 +247,8 @@ ipcMain.handle('fs:saveFile', async (event, { filePath, content }) => {
 ipcMain.handle('fs:renameFile', async (event, { oldPath, newName }) => {
   try {
     if (!isSafeFileName(newName)) throw new Error(`Nombre de fichero no válido: ${newName}`);
-    const safeOld = resolveInsideRoot(projectRoot, oldPath);
-    const newPath = resolveInsideRoot(path.dirname(safeOld), newName);
+    const safeOld = resolveMutableExistingInsideRoot(projectRoot, oldPath);
+    const newPath = resolveNewInsideRoot(projectRoot, path.dirname(safeOld), newName);
     await fs.promises.rename(safeOld, newPath);
     return { success: true, newPath };
   } catch (e) {
@@ -233,9 +259,9 @@ ipcMain.handle('fs:renameFile', async (event, { oldPath, newName }) => {
 
 ipcMain.handle('fs:deleteFile', async (event, filePath) => {
   try {
-    const safePath = resolveInsideRoot(projectRoot, filePath);
+    const safePath = resolveMutableExistingInsideRoot(projectRoot, filePath);
     // Borrar la raíz entera nunca es lo que el usuario quiso pedir desde la UI.
-    if (safePath === path.resolve(projectRoot)) {
+    if (fs.realpathSync(safePath) === fs.realpathSync(projectRoot)) {
       throw new Error('No se puede borrar la raíz del proyecto.');
     }
     const stat = await fs.promises.stat(safePath);
@@ -272,7 +298,7 @@ ipcMain.handle('terminal:spawn', async (event, cwd) => {
     }
 
     const shell = getShell();
-    const workingDir = cwd || process.env.HOME || process.cwd();
+    const workingDir = resolveTerminalCwd(projectRoot, cwd);
 
     terminalProcess = pty.spawn(shell, [], {
       name: 'xterm-256color',
@@ -431,8 +457,9 @@ ipcMain.handle('search:global', async (event, { query, projectPath, options = {}
   try {
     console.log(`🔍 Searching for "${query}" in ${projectPath}`);
     const startTime = Date.now();
+    const safeProjectPath = resolveRequestedProjectPath(projectPath);
 
-    const results = await searchRecursive(projectPath, query, options);
+    const results = await searchRecursive(safeProjectPath, query, options);
 
     const elapsed = Date.now() - startTime;
     console.log(`🔍 Found ${results.length} results in ${elapsed}ms`);
@@ -452,7 +479,8 @@ ipcMain.handle('search:global', async (event, { query, projectPath, options = {}
 //
 ipcMain.handle('git:status', async (event, projectPath) => {
   try {
-    const git = simpleGit(projectPath);
+    const safeProjectPath = resolveRequestedProjectPath(projectPath);
+    const git = simpleGit(safeProjectPath);
 
     // Check if this is a git repository
     const isRepo = await git.checkIsRepo();
@@ -487,8 +515,10 @@ ipcMain.handle('git:status', async (event, projectPath) => {
 
 ipcMain.handle('git:stage', async (event, { projectPath, files }) => {
   try {
-    const git = simpleGit(projectPath);
-    await git.add(files);
+    const safeProjectPath = resolveRequestedProjectPath(projectPath);
+    const safeFiles = normalizeGitPathspecs(safeProjectPath, files);
+    const git = simpleGit(safeProjectPath);
+    await git.add(['--', ...safeFiles]);
     return { success: true };
   } catch (error) {
     console.error('Git stage error:', error);
@@ -498,8 +528,10 @@ ipcMain.handle('git:stage', async (event, { projectPath, files }) => {
 
 ipcMain.handle('git:unstage', async (event, { projectPath, files }) => {
   try {
-    const git = simpleGit(projectPath);
-    await git.reset(['HEAD', '--', ...files]);
+    const safeProjectPath = resolveRequestedProjectPath(projectPath);
+    const safeFiles = normalizeGitPathspecs(safeProjectPath, files);
+    const git = simpleGit(safeProjectPath);
+    await git.reset(['HEAD', '--', ...safeFiles]);
     return { success: true };
   } catch (error) {
     console.error('Git unstage error:', error);
@@ -509,7 +541,11 @@ ipcMain.handle('git:unstage', async (event, { projectPath, files }) => {
 
 ipcMain.handle('git:commit', async (event, { projectPath, message }) => {
   try {
-    const git = simpleGit(projectPath);
+    const safeProjectPath = resolveRequestedProjectPath(projectPath);
+    if (typeof message !== 'string' || message.trim() === '' || message.length > 5000) {
+      throw new Error('Mensaje de commit no válido.');
+    }
+    const git = simpleGit(safeProjectPath);
     const result = await git.commit(message);
     return {
       success: true,
@@ -528,8 +564,10 @@ ipcMain.handle('git:commit', async (event, { projectPath, message }) => {
 
 ipcMain.handle('git:diff', async (event, { projectPath, file }) => {
   try {
-    const git = simpleGit(projectPath);
-    const diff = await git.diff([file]);
+    const safeProjectPath = resolveRequestedProjectPath(projectPath);
+    const [safeFile] = normalizeGitPathspecs(safeProjectPath, [file]);
+    const git = simpleGit(safeProjectPath);
+    const diff = await git.diff(['--', safeFile]);
     return { success: true, diff };
   } catch (error) {
     console.error('Git diff error:', error);
@@ -539,8 +577,10 @@ ipcMain.handle('git:diff', async (event, { projectPath, file }) => {
 
 ipcMain.handle('git:log', async (event, { projectPath, maxCount = 20 }) => {
   try {
-    const git = simpleGit(projectPath);
-    const log = await git.log({ maxCount });
+    const safeProjectPath = resolveRequestedProjectPath(projectPath);
+    const safeMaxCount = Math.min(100, Math.max(1, Number.parseInt(maxCount, 10) || 20));
+    const git = simpleGit(safeProjectPath);
+    const log = await git.log({ maxCount: safeMaxCount });
     return {
       success: true,
       commits: log.all.map(c => ({

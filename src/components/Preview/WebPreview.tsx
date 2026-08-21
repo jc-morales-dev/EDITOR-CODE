@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { FileNode } from '../../types/electron';
 import { useStore } from '../../store/useStore';
+import { PREVIEW_SANDBOX, isPreviewErrorMessage } from './previewSecurity';
 
 interface WebPreviewProps {
   files: FileNode[];
@@ -11,6 +12,7 @@ const WebPreview: React.FC<WebPreviewProps> = ({ files, refreshTrigger }) => {
   const iframeRef = useRef<HTMLIFrameElement>(null);
   const [errors, setErrors] = useState<string[]>([]);
   const [isLoading, setIsLoading] = useState(true);
+  const [previewHtml, setPreviewHtml] = useState('');
 
   useEffect(() => {
     const updatePreview = async () => {
@@ -19,18 +21,11 @@ const WebPreview: React.FC<WebPreviewProps> = ({ files, refreshTrigger }) => {
       setErrors([]);
       setIsLoading(true);
 
-      const iframe = iframeRef.current;
-      const doc = iframe.contentDocument || iframe.contentWindow?.document;
-
-      if (!doc) return;
-
       // 1. Encontrar index.html
       const htmlFile = files.find(f => f.name === 'index.html' || f.name.endsWith('.html'));
 
       if (!htmlFile) {
-        doc.open();
-        doc.write('<div style="color:#666;font-family:monospace;padding:20px;text-align:center"><p style="font-size:48px;margin:0"></p><p> No index.html found</p><p style="font-size:12px;opacity:0.6">Create an index.html file to preview</p></div>');
-        doc.close();
+        setPreviewHtml('<div style="color:#666;font-family:monospace;padding:20px;text-align:center"><p style="font-size:48px;margin:0"></p><p>No index.html found</p><p style="font-size:12px;opacity:0.6">Create an index.html file to preview</p></div>');
         setIsLoading(false);
         return;
       }
@@ -76,22 +71,30 @@ const WebPreview: React.FC<WebPreviewProps> = ({ files, refreshTrigger }) => {
         }
 
         // Inyectar JS con captura de errores mejorada
-        const scripts = jsContents.map(f => `
+        const scripts = jsContents.map(f => {
+          const fileName = JSON.stringify(f.name);
+          return `
           <script>
             try {
               /* ${f.name} */
               ${f.content}
             } catch(err) {
-              console.error("Error in ${f.name}:", err);
-              document.body.innerHTML += '<div style="color:red;background:#ffebee;padding:10px;border:1px solid red;margin:10px"> JS Error in ${f.name}: ' + err.message + '</div>';
+              const file = ${fileName};
+              const message = err instanceof Error ? err.message : String(err);
+              console.error("Preview error in", file, err);
+              const banner = document.createElement('div');
+              banner.style.cssText = 'color:red;background:#ffebee;padding:10px;border:1px solid red;margin:10px';
+              banner.textContent = 'JS Error in ' + file + ': ' + message;
+              document.body.appendChild(banner);
               window.parent.postMessage({ 
                 type: 'preview-error', 
-                file: '${f.name}', 
-                message: err.message 
+                file,
+                message
               }, '*');
             }
           </script>
-        `).join('\n');
+        `;
+        }).join('\n');
 
         if (finalHtml.includes('</body>')) {
           finalHtml = finalHtml.replace('</body>', `${scripts}\n</body>`);
@@ -99,15 +102,12 @@ const WebPreview: React.FC<WebPreviewProps> = ({ files, refreshTrigger }) => {
           finalHtml = `${finalHtml}${scripts}`;
         }
 
-        // 3. Escribir en el iframe
-        doc.open();
-        doc.write(finalHtml);
-        doc.close();
+        // React entrega el documento a un iframe de origen opaco. El preview no
+        // vuelve a compartir DOM ni APIs privilegiadas con el renderer.
+        setPreviewHtml(finalHtml);
       } catch (error) {
         console.error('Preview error:', error);
-        doc.open();
-        doc.write(`<div style="color:red;font-family:monospace;padding:20px"> Error loading preview: ${error}</div>`);
-        doc.close();
+        setPreviewHtml('<div style="color:red;font-family:monospace;padding:20px">Error loading preview.</div>');
       } finally {
         setIsLoading(false);
       }
@@ -125,7 +125,7 @@ const WebPreview: React.FC<WebPreviewProps> = ({ files, refreshTrigger }) => {
   // Listener for error messages from iframe and sync to store
   useEffect(() => {
     const handleMessage = (event: MessageEvent) => {
-      if (event.data?.type === 'preview-error') {
+      if (isPreviewErrorMessage(event, iframeRef.current?.contentWindow ?? null)) {
         const errorMsg = `${event.data.file}: ${event.data.message}`;
         setErrors(prev => {
           const newErrors = [...prev, errorMsg];
@@ -158,7 +158,10 @@ const WebPreview: React.FC<WebPreviewProps> = ({ files, refreshTrigger }) => {
 
       {/* Error Notification Banner */}
       {errors.length > 0 && (
-        <div className="bg-red-600 text-white px-4 py-2 text-xs font-mono flex items-start justify-between gap-2 animate-in slide-in-from-top-2 duration-200">
+        <div
+          role="alert"
+          className="bg-red-600 text-white px-4 py-2 text-xs font-mono flex items-start justify-between gap-2 animate-in slide-in-from-top-2 duration-200"
+        >
           <div className="flex-1">
             <div className="font-bold mb-1"> {errors.length} JavaScript Error{errors.length > 1 ? 's' : ''} Detected</div>
             <div className="space-y-0.5 opacity-90">
@@ -171,6 +174,7 @@ const WebPreview: React.FC<WebPreviewProps> = ({ files, refreshTrigger }) => {
             onClick={() => setErrors([])}
             className="text-white hover:text-red-200 transition-colors shrink-0 text-lg leading-none"
             title="Dismiss"
+            aria-label="Dismiss preview errors"
           >
             ×
           </button>
@@ -184,12 +188,13 @@ const WebPreview: React.FC<WebPreviewProps> = ({ files, refreshTrigger }) => {
         </div>
       )}
 
-      {/* IFRAME: allow-scripts es vital para que corra JS */}
+      {/* El preview ejecuta scripts en un origen opaco, sin popups ni acceso al padre. */}
       <iframe
         ref={iframeRef}
         title="preview"
         className="flex-1 w-full border-none bg-white"
-        sandbox="allow-scripts allow-modals allow-forms allow-popups allow-same-origin"
+        sandbox={PREVIEW_SANDBOX}
+        srcDoc={previewHtml}
       />
     </div>
   );

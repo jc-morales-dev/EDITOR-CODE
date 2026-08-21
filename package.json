@@ -3,8 +3,8 @@
   "private": true,
   "version": "1.0.0",
   "main": "electron/main.js",
-  "author": "Zenith Corp",
-  "description": "A Cyberpunk IDE powered by AI",
+  "author": "Julio Cesar Morales",
+  "description": "An Electron and React IDE prototype with Gemini integration, a real terminal, and reviewable file changes",
   "type": "module",
   "scripts": {
     "dev": "concurrently -k \"cross-env BROWSER=none npm run react-start\" \"npm run electron-start\"",
@@ -80,5 +80,9 @@
     "vite": "^5.0.12",
     "vitest": "^4.1.1",
     "wait-on": "^7.2.0"
+  },
+  "overrides": {
+    "dompurify": "3.4.13",
+    "tar": "7.5.22"
   }
 }
