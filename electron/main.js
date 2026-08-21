@@ -5,6 +5,7 @@ import { GoogleGenerativeAI } from '@google/generative-ai';
 import dotenv from 'dotenv';
 import chokidar from 'chokidar';
 import { createRequire } from 'module';
+import { resolveInsideRoot, isSafeFileName } from './pathGuard.js';
 
 // CommonJS modules (electron, node-pty, simple-git)
 const require = createRequire(import.meta.url);
@@ -20,6 +21,11 @@ dotenv.config();
 let mainWindow;
 let watcher = null; // Variable para el vigilante de archivos
 let terminalProcess = null; // Variable para el proceso de terminal
+
+// Raíz del proyecto abierto. La fija el usuario al elegir carpeta en el diálogo
+// nativo, y todas las operaciones de fichero se confinan dentro (pathGuard.js).
+// Sin carpeta abierta no se toca el disco.
+let projectRoot = null;
 
 // RUTA DE SETTINGS (lazy loading porque app.getPath no está disponible antes de app.ready)
 let SETTINGS_PATH = null;
@@ -142,12 +148,19 @@ async function readDirRecursive(dirPath, currentDepth = 0) {
 //
 
 ipcMain.handle('fs:readFile', async (event, filePath) => {
-  try { return await fs.promises.readFile(filePath, 'utf-8'); } catch (e) { return ""; }
+  try {
+    const safePath = resolveInsideRoot(projectRoot, filePath);
+    return await fs.promises.readFile(safePath, 'utf-8');
+  } catch (e) { return ""; }
 });
 
 ipcMain.handle('dialog:openDirectory', async () => {
   const { canceled, filePaths } = await dialog.showOpenDialog(mainWindow, { properties: ['openDirectory'] });
   if (canceled) return null;
+
+  // El diálogo nativo es la única vía para fijar la raíz: la elige el usuario,
+  // no el renderer.
+  projectRoot = filePaths[0];
 
   // AL ABRIR CARPETA, INICIAMOS EL WATCHER
   startWatching(filePaths[0]);
@@ -159,7 +172,15 @@ ipcMain.handle('fs:readDir', async (event, dirPath) => {
   const startTime = Date.now();
   fileCount = 0; // Resetear contador antes de cada carga
 
-  const result = await readDirRecursive(dirPath);
+  let safeDir;
+  try {
+    safeDir = resolveInsideRoot(projectRoot, dirPath);
+  } catch (e) {
+    console.warn(`[fs:readDir] ${e.message}`);
+    return [];
+  }
+
+  const result = await readDirRecursive(safeDir);
 
   const elapsed = Date.now() - startTime;
   console.log(` Loaded ${fileCount} files in ${elapsed}ms`);
@@ -173,32 +194,58 @@ ipcMain.handle('fs:readDir', async (event, dirPath) => {
 
 ipcMain.handle('fs:createFile', async (event, { basePath, name, content }) => {
   try {
-    const fullPath = path.join(basePath, name);
+    // El nombre se valida aparte: sin esto, un "name" con ../ escaparía de
+    // basePath aunque basePath sí estuviera dentro del proyecto.
+    if (!isSafeFileName(name)) throw new Error(`Nombre de fichero no válido: ${name}`);
+    const safeBase = resolveInsideRoot(projectRoot, basePath);
+    const fullPath = resolveInsideRoot(safeBase, name);
     await fs.promises.writeFile(fullPath, content || '', 'utf-8');
     return { success: true, file: { name, path: fullPath, type: 'file', language: getLanguage(name) } };
-  } catch (e) { return { success: false }; }
+  } catch (e) {
+    console.warn(`[fs:createFile] ${e.message}`);
+    return { success: false, error: e.message };
+  }
 });
 
 ipcMain.handle('fs:saveFile', async (event, { filePath, content }) => {
-  try { await fs.promises.writeFile(filePath, content, 'utf-8'); return true; } catch (e) { return false; }
+  try {
+    const safePath = resolveInsideRoot(projectRoot, filePath);
+    await fs.promises.writeFile(safePath, content, 'utf-8');
+    return true;
+  } catch (e) {
+    console.warn(`[fs:saveFile] ${e.message}`);
+    return false;
+  }
 });
 
 ipcMain.handle('fs:renameFile', async (event, { oldPath, newName }) => {
   try {
-    const dir = path.dirname(oldPath);
-    const newPath = path.join(dir, newName);
-    await fs.promises.rename(oldPath, newPath);
+    if (!isSafeFileName(newName)) throw new Error(`Nombre de fichero no válido: ${newName}`);
+    const safeOld = resolveInsideRoot(projectRoot, oldPath);
+    const newPath = resolveInsideRoot(path.dirname(safeOld), newName);
+    await fs.promises.rename(safeOld, newPath);
     return { success: true, newPath };
-  } catch (e) { return { success: false }; }
+  } catch (e) {
+    console.warn(`[fs:renameFile] ${e.message}`);
+    return { success: false, error: e.message };
+  }
 });
 
 ipcMain.handle('fs:deleteFile', async (event, filePath) => {
   try {
-    const stat = await fs.promises.stat(filePath);
-    if (stat.isDirectory()) await fs.promises.rm(filePath, { recursive: true, force: true });
-    else await fs.promises.unlink(filePath);
+    const safePath = resolveInsideRoot(projectRoot, filePath);
+    // Borrar la raíz entera nunca es lo que el usuario quiso pedir desde la UI.
+    if (safePath === path.resolve(projectRoot)) {
+      throw new Error('No se puede borrar la raíz del proyecto.');
+    }
+    const stat = await fs.promises.stat(safePath);
+    if (stat.isDirectory()) await fs.promises.rm(safePath, { recursive: true, force: true });
+    else await fs.promises.unlink(safePath);
     return true;
-  } catch (e) { return false; }
+  } catch (e) {
+    console.warn(`[fs:deleteFile] ${e.message}`);
+    return false;
+  }
 });
 
 ipcMain.handle('settings:get', async () => getSettings());
