@@ -82,6 +82,22 @@ Zenith IDE is meant as a local tool for exploring AI-assisted development workfl
    npm run electron-pack
    ```
 
+## 🔒 Security boundaries
+
+- File operations are confined to the opened project root and reject lexical
+  traversal, sibling-prefix tricks, path separators or null bytes in standalone
+  filenames, and symlink or junction escapes in guarded operations.
+- The terminal's initial working directory must resolve inside the opened project.
+- Electron navigation is restricted to the expected development origin or the
+  packaged application directory; external origins and `javascript:` URLs are
+  rejected.
+- Focused tests cover filesystem guard helpers, path confinement, navigation, preview
+  content, the file-service bridge, and the application store.
+
+These controls reduce accidental or malicious filesystem escape, but commands
+run in the real terminal still have the permissions of the local user and must
+be reviewed before execution.
+
 ## 🧪 Quality
 
 - GitHub Actions CI for `lint`, `typecheck`, and `test`
