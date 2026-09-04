@@ -10,7 +10,8 @@ build/
 
 # Env
 .env
-.env.local
+.env.*
+!.env.example
 *.local
 
 # IDE

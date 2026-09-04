@@ -3,6 +3,9 @@
 [![CI](https://github.com/jc-morales-dev/EDITOR-CODE/actions/workflows/ci.yml/badge.svg)](https://github.com/jc-morales-dev/EDITOR-CODE/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-0F172A.svg)](./LICENSE)
 
+> [!IMPORTANT]
+> **Prototype status:** Zenith IDE is an experimental local desktop prototype (Electron + React). Expect rough edges, breaking changes, and incomplete polish. Not a production-ready product.
+
 > A Cyberpunk-themed Integrated Development Environment powered by AI.
 
 Zenith IDE is an **Electron + React desktop prototype**: a code editor with deep AI integration (Gemini). It's not just a chat wrapper; the agent has control over the file system, a real terminal, and "self-healing" capabilities.

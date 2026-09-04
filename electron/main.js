@@ -210,7 +210,6 @@ ipcMain.handle('fs:readDir', async (event, dirPath) => {
   const result = await readDirRecursive(safeDir);
 
   const elapsed = Date.now() - startTime;
-  console.log(` Loaded ${fileCount} files in ${elapsed}ms`);
 
   if (fileCount >= MAX_FILES) {
     console.warn(` Project truncated: max ${MAX_FILES} files reached`);
@@ -317,14 +316,12 @@ ipcMain.handle('terminal:spawn', async (event, cwd) => {
 
     // Manejar cierre del proceso
     terminalProcess.onExit(({ exitCode }) => {
-      console.log(`Terminal process exited with code ${exitCode}`);
       if (mainWindow && !mainWindow.isDestroyed()) {
         mainWindow.webContents.send('terminal:exit', exitCode);
       }
       terminalProcess = null;
     });
 
-    console.log(` Terminal spawned: ${shell} in ${workingDir}`);
     return { success: true, shell, cwd: workingDir };
   } catch (error) {
     console.error('Terminal spawn error:', error);
@@ -455,14 +452,12 @@ ipcMain.handle('search:global', async (event, { query, projectPath, options = {}
   }
 
   try {
-    console.log(`🔍 Searching for "${query}" in ${projectPath}`);
     const startTime = Date.now();
     const safeProjectPath = resolveRequestedProjectPath(projectPath);
 
     const results = await searchRecursive(safeProjectPath, query, options);
 
     const elapsed = Date.now() - startTime;
-    console.log(`🔍 Found ${results.length} results in ${elapsed}ms`);
 
     return {
       success: true,

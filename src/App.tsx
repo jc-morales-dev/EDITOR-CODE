@@ -45,7 +45,6 @@ const App = () => {
     if (currentView === 'editor' && projectPath) {
       // Suscribirse a cambios de archivos
       window.electronAPI.onFileChange(async (data) => {
-        console.log("File System Change detected:", data);
 
         // 1. Si se agrega o borra un archivo, recargamos todo el árbol
         if (data.event === 'add' || data.event === 'unlink' || data.event === 'addDir' || data.event === 'unlinkDir') {
@@ -60,7 +59,6 @@ const App = () => {
             const newContent = await fileService.readFile(data.path);
             updateFileContent(newContent);
           } else {
-            console.log("Conflicto: Archivo modificado externamente pero tienes cambios sin guardar.");
             // Aquí podrías mostrar un aviso (toast)
           }
         }
