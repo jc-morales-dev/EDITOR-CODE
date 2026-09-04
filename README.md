@@ -1,6 +1,6 @@
 # ⚡ Zenith IDE
 
-[![CI](https://github.com/Victor00128/EDITOR-CODE/actions/workflows/ci.yml/badge.svg)](https://github.com/Victor00128/EDITOR-CODE/actions/workflows/ci.yml)
+[![CI](https://github.com/jc-morales-dev/EDITOR-CODE/actions/workflows/ci.yml/badge.svg)](https://github.com/jc-morales-dev/EDITOR-CODE/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-0F172A.svg)](./LICENSE)
 
 > A Cyberpunk-themed Integrated Development Environment powered by AI.
@@ -53,7 +53,7 @@ Zenith IDE is meant as a local tool for exploring AI-assisted development workfl
 
 1. **Clone the repository**
    ```bash
-   git clone https://github.com/Victor00128/EDITOR-CODE.git
+   git clone https://github.com/jc-morales-dev/EDITOR-CODE.git
    cd EDITOR-CODE
    ```
 
