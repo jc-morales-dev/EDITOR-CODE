@@ -3,6 +3,8 @@
 [![CI](https://github.com/jc-morales-dev/EDITOR-CODE/actions/workflows/ci.yml/badge.svg)](https://github.com/jc-morales-dev/EDITOR-CODE/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-0F172A.svg)](./LICENSE)
 
+**Status:** `prototype` — Zenith IDE (Electron + React desktop). Not a hosted web demo.
+
 > [!IMPORTANT]
 > **Prototype status:** Zenith IDE is an experimental local desktop prototype (Electron + React). Expect rough edges, breaking changes, and incomplete polish. Not a production-ready product.
 
